@@ -1,9 +1,6 @@
 repo: deblasis/ghostty
 base: windows
 prs:
-- branch: windows-interop-marshalling-audit
-  pr: 211
-  status: open
 - branch: windows-aot-analyzers
   pr: 212
   status: open
