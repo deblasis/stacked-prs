@@ -1,7 +1,3 @@
 repo: deblasis/ghostty
 base: windows
-prs:
-- branch: windows-tab-detach-snap
-  pr: 223
-  status: open
-  sha: f8cc87bd0b2902870a30c60bd48d2a1909b84e41
+prs: []
