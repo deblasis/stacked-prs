@@ -1,10 +1,6 @@
 repo: deblasis/ghostty
 base: windows
 prs:
-- branch: windows-tab-colors
-  pr: 222
-  status: open
-  sha: d3953fe8f422fde009b799031a6015e465c66870
 - branch: windows-interop-cswin32
   pr: 215
   status: open
