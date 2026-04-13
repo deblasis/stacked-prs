@@ -5,3 +5,4 @@ prs:
 - branch: feature-c
   pr: 3
   status: open
+  sha: 776b1a1e378d2625716da19a3c7f312f35e6dab1
