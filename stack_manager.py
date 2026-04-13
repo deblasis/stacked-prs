@@ -86,11 +86,17 @@ def discord_flush():
     req = urllib.request.Request(
         DISCORD_WEBHOOK_URL,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "StackedPRManager/1.0",
+        },
         method="POST",
     )
     try:
         urllib.request.urlopen(req, timeout=10)
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode(errors="replace") if exc.fp else ""
+        print(f"  Warning: Discord notification failed: {exc} — {err_body}")
     except Exception as exc:
         print(f"  Warning: Discord notification failed: {exc}")
 
