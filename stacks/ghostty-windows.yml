@@ -4,4 +4,4 @@ prs:
 - branch: windows-tab-detach-snap
   pr: 223
   status: open
-  sha: aa05ff18f1b476e59f0a741a97e9923deba0661d
+  sha: f8cc87bd0b2902870a30c60bd48d2a1909b84e41
