@@ -1,6 +1,7 @@
 name: Stack Manager
 
 on:
+  push:                      # run on push (for initial setup)
   schedule:
     - cron: "*/5 * * * *"  # every 5 minutes
   workflow_dispatch:         # manual trigger
