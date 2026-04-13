@@ -2,9 +2,6 @@ repo: deblasis/stacked-prs-test
 fork: deblasis/stacked-prs-test
 base: main
 prs:
-- branch: feature-b
-  pr: 2
-  status: open
 - branch: feature-c
   pr: 3
   status: open
