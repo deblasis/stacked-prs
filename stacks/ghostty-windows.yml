@@ -1,9 +1,6 @@
 repo: deblasis/ghostty
 base: windows
 prs:
-- branch: windows-aot-analyzers
-  pr: 212
-  status: open
 - branch: windows-tab-colors
   pr: 222
   status: open
