@@ -1,0 +1,21 @@
+repo: deblasis/ghostty
+base: windows
+prs:
+- branch: windows-winappsdk-bump
+  pr: 210
+  status: open
+- branch: windows-interop-marshalling-audit
+  pr: 211
+  status: open
+- branch: windows-aot-analyzers
+  pr: 212
+  status: open
+- branch: windows-tab-colors
+  pr: 222
+  status: open
+- branch: windows-interop-cswin32
+  pr: 215
+  status: open
+- branch: windows-tab-detach-snap
+  pr: 223
+  status: open
