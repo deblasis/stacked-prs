@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # Ensure UTF-8 output on Windows
@@ -21,6 +22,43 @@ if sys.platform == "win32":
 import yaml
 
 STACKS_DIR = Path("stacks")
+LOCKS_DIR = Path(".locks")
+LOCK_MAX_AGE_SECONDS = 600  # 10 minutes — stale lock threshold
+
+
+def acquire_lock(fork_repo):
+    """Acquire a file-based lock for a fork repo.
+
+    Returns True if acquired, False if another run holds it.
+    Lock files are committed to the repo so they survive across runs.
+    """
+    LOCKS_DIR.mkdir(exist_ok=True)
+    lock_file = LOCKS_DIR / f"{fork_repo.replace('/', '_')}.lock"
+
+    if lock_file.exists():
+        try:
+            lock_data = json.loads(lock_file.read_text())
+            lock_time = lock_data.get("timestamp", 0)
+            age = time.time() - lock_time
+            if age < LOCK_MAX_AGE_SECONDS:
+                print(f"  Lock held for {fork_repo} (age: {int(age)}s) — skipping")
+                return False
+            print(f"  Stale lock for {fork_repo} (age: {int(age)}s) — reclaiming")
+        except (json.JSONDecodeError, KeyError):
+            print(f"  Corrupt lock for {fork_repo} — reclaiming")
+
+    lock_file.write_text(json.dumps({
+        "fork": fork_repo,
+        "timestamp": time.time(),
+        "pid": os.getpid(),
+    }))
+    return True
+
+
+def release_lock(fork_repo):
+    """Release the lock for a fork repo."""
+    lock_file = LOCKS_DIR / f"{fork_repo.replace('/', '_')}.lock"
+    lock_file.unlink(missing_ok=True)
 
 
 def run_cmd(cmd, cwd=None, check=True):
@@ -219,41 +257,49 @@ def process_stack(stack_file, dry_run=False):
             yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
         return True, errors
 
+    # ── Acquire per-fork lock ──────────────────────────────────
+    if not acquire_lock(fork):
+        errors.append((None, f"Skipped — lock held for fork {fork}"))
+        return False, errors
+
     # ── Clone, rebase, push ─────────────────────────────────────
     upstream_remote = "upstream" if fork != repo else "origin"
 
-    with tempfile.TemporaryDirectory() as tmp:
-        clone_dir = Path(tmp) / "repo"
-        setup_clone(fork, repo, clone_dir)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            clone_dir = Path(tmp) / "repo"
+            setup_clone(fork, repo, clone_dir)
 
-        git("fetch", upstream_remote, base, cwd=clone_dir)
-        for pr_entry in remaining:
-            git("fetch", "origin", pr_entry["branch"], cwd=clone_dir)
+            git("fetch", upstream_remote, base, cwd=clone_dir)
+            for pr_entry in remaining:
+                git("fetch", "origin", pr_entry["branch"], cwd=clone_dir)
 
-        # Fetch the last merged branch — needed as old-base reference
-        fetch = git(
-            "fetch", "origin", last_merged["branch"],
-            cwd=clone_dir, check=False,
-        )
-        if fetch.returncode != 0:
-            msg = (
-                f"Old base branch `{last_merged['branch']}` no longer exists "
-                "on the fork — cannot determine rebase range"
+            # Fetch the last merged branch — needed as old-base reference
+            fetch = git(
+                "fetch", "origin", last_merged["branch"],
+                cwd=clone_dir, check=False,
             )
-            print(f"  ERROR: {msg}")
-            errors.append((None, msg))
-            stack["prs"] = remaining
-            with open(stack_file, "w") as fh:
-                yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
-            return True, errors
+            if fetch.returncode != 0:
+                msg = (
+                    f"Old base branch `{last_merged['branch']}` no longer "
+                    "exists on the fork — cannot determine rebase range"
+                )
+                print(f"  ERROR: {msg}")
+                errors.append((None, msg))
+                stack["prs"] = remaining
+                with open(stack_file, "w") as fh:
+                    yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
+                return True, errors
 
-        results = rebase_remaining(
-            clone_dir, base, remaining,
-            last_merged["branch"], upstream_remote, repo,
-        )
-        for entry, ok, error in results:
-            if not ok:
-                errors.append((entry, error))
+            results = rebase_remaining(
+                clone_dir, base, remaining,
+                last_merged["branch"], upstream_remote, repo,
+            )
+            for entry, ok, error in results:
+                if not ok:
+                    errors.append((entry, error))
+    finally:
+        release_lock(fork)
 
     # ── Persist updated status ──────────────────────────────────
     stack["prs"] = remaining

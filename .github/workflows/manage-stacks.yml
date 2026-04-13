@@ -2,12 +2,12 @@ name: Stack Manager
 
 on:
   schedule:
-    - cron: "*/5 * * * *"  # every 5 minutes
+    - cron: "*/2 * * * *"  # every 2 minutes
   workflow_dispatch:         # manual trigger
 
 concurrency:
   group: stack-manager
-  cancel-in-progress: false  # queue, don't cancel
+  cancel-in-progress: true  # drop stale runs, only latest matters
 
 permissions:
   contents: write
