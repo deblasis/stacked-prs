@@ -1,0 +1,40 @@
+name: Stack Manager
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"  # every 5 minutes
+  workflow_dispatch:         # manual trigger
+
+concurrency:
+  group: stack-manager
+  cancel-in-progress: false  # queue, don't cancel
+
+permissions:
+  contents: write
+
+jobs:
+  manage-stacks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout control-plane repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.STACKED_PRS_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Configure git
+        run: |
+          git config user.name "Stacked PR Manager"
+          git config user.email "stacked-prs[bot]@users.noreply.github.com"
+
+      - name: Run stack manager
+        env:
+          GH_TOKEN: ${{ secrets.STACKED_PRS_TOKEN }}
+        run: python stack_manager.py
