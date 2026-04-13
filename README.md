@@ -53,6 +53,7 @@ prs:
 | `prs[].branch` | yes | Branch name on the fork |
 | `prs[].pr` | yes | PR number on the upstream repo. Use `null` if PR hasn't been opened yet |
 | `prs[].status` | yes | Current status: `open`, `merged`, `conflict`, `push_failed` |
+| `prs[].sha` | auto | Branch tip SHA, snapshotted automatically on each poll. Do not set manually. |
 
 ### Status values
 
@@ -123,7 +124,7 @@ prs:
 
 ### 5. Push and wait
 
-The cron runs every 2 minutes. When you merge the bottom PR of any stack, the remaining PRs get rebased automatically.
+The cron runs every 5 minutes. When you merge the bottom PR of any stack, the remaining PRs get rebased automatically.
 
 You can also trigger manually:
 
@@ -139,10 +140,10 @@ Given this stack:
 main  <--  feature-a (PR #1)  <--  feature-b (PR #2)  <--  feature-c (PR #3)
 ```
 
-When PR #1 is merged (regular or squash merge):
+When PR #1 is merged:
 
 1. `feature-a` is detected as merged and removed from the stack
-2. `feature-b` is rebased onto `main` using `git rebase --onto main origin/feature-a feature-b`
+2. `feature-b` is rebased onto `main` using `git rebase --onto main <old-base> feature-b`
 3. `feature-c` is rebased onto the new `feature-b`
 4. Both branches are force-pushed to the fork
 5. Comments are posted on PRs #2 and #3:
@@ -156,6 +157,28 @@ If a rebase conflicts:
    > ⚠️ **Stacked PR Manager** 🤖: rebase conflict
 3. Cascading stops — PRs above the conflict are not rebased
 4. You resolve manually, push, and set status back to `open` in the YAML
+
+## Merge strategies and branch deletion
+
+All three GitHub merge strategies are supported:
+
+| Merge strategy | How it works |
+|---------------|-------------|
+| **Merge commit** | branch_1's commits exist in main with original SHAs. Rebase skips them trivially. |
+| **Rebase merge** | branch_1's commits are replayed with new SHAs but identical patches. Rebase handles this cleanly. |
+| **Squash merge** | All of branch_1's commits become one commit with a different patch. Requires the saved SHA to determine the precise rebase range. |
+
+### Branch deletion is safe
+
+You can enable GitHub's "Automatically delete head branches" setting. The stack manager handles this:
+
+1. On **every poll**, the script snapshots each tracked branch's tip SHA into the YAML (`sha` field)
+2. When a merged branch is deleted, the saved SHA is used as the old-base reference for `git rebase --onto`
+3. This works identically to having the branch present — including squash merges
+
+The only edge case: if a branch is deleted before the script has **ever** run (no saved SHA), the script falls back to a plain `git rebase` which works for regular and rebase merges but may conflict on squash merges. In practice this doesn't happen since the cron saves SHAs continuously.
+
+**You do not need to coordinate merge timing with the stack manager.** Merge however you like, delete branches whenever you like — the SHA snapshots ensure the rebase range is always known.
 
 ## Safety features
 

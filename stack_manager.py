@@ -92,6 +92,31 @@ def gh_json(*args):
 # ── GitHub helpers ──────────────────────────────────────────────
 
 
+def _snapshot_branch_shas(repo, fork, prs):
+    """Save the current tip SHA of each tracked branch into the YAML entries.
+
+    This lets us use the SHA as old-base even after the branch is deleted
+    (e.g., GitHub auto-deletes merged branches).  Returns True if any SHA
+    was updated.
+    """
+    updated = False
+    for pr_entry in prs:
+        if pr_entry["status"] in ("merged", "closed"):
+            continue
+        branch = pr_entry["branch"]
+        try:
+            data = gh_json(
+                "api", f"repos/{fork}/git/ref/heads/{branch}",
+            )
+            sha = data["object"]["sha"]
+            if pr_entry.get("sha") != sha:
+                pr_entry["sha"] = sha
+                updated = True
+        except Exception:
+            pass  # branch might not exist yet
+    return updated
+
+
 def get_pr_state(repo, pr_number):
     """Return PR state: OPEN, MERGED, or CLOSED."""
     data = gh_json("pr", "view", str(pr_number), "--repo", repo, "--json", "state")
@@ -131,18 +156,17 @@ def setup_clone(fork_repo, upstream_repo, clone_dir):
 
 
 def rebase_remaining(clone_dir, base_branch, remaining_prs,
-                     last_merged_branch, upstream_remote, upstream_repo):
+                     old_base_ref, upstream_remote, upstream_repo):
     """Rebase every remaining PR in the stack after lower PRs were merged.
 
-    Uses ``git rebase --onto`` so only the commits unique to each branch are
-    transplanted, which handles squash-merges cleanly.
+    ``old_base_ref`` can be:
+    - ``origin/<branch>`` — the merged branch still exists on the fork
+    - a SHA string — branch was deleted but we saved the tip SHA
+    - ``None`` — branch deleted and no SHA saved; falls back to plain rebase
+      (works for regular merges, may conflict on squash merges)
     """
     results = []
     base_ref = f"{upstream_remote}/{base_branch}"
-
-    # The "old base" for the first remaining PR is the last merged branch
-    # (which still exists on the fork as origin/<branch>).
-    old_base_ref = f"origin/{last_merged_branch}"
 
     for i, pr_entry in enumerate(remaining_prs):
         branch = pr_entry["branch"]
@@ -156,11 +180,21 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
         # Save the current tip — it becomes `old_base_ref` for the next PR
         old_tip = git_output("rev-parse", "HEAD", cwd=clone_dir)
 
-        print(f"  Rebasing {branch} --onto {onto_ref} {old_base_ref}")
-        result = git(
-            "rebase", "--onto", onto_ref, old_base_ref, branch,
-            cwd=clone_dir, check=False,
-        )
+        if old_base_ref:
+            # Precise rebase: transplant only commits unique to this branch
+            print(f"  Rebasing {branch} --onto {onto_ref} {old_base_ref}")
+            result = git(
+                "rebase", "--onto", onto_ref, old_base_ref, branch,
+                cwd=clone_dir, check=False,
+            )
+        else:
+            # Fallback: old base branch was deleted, use plain rebase
+            # Git's patch-id matching skips already-applied commits
+            print(f"  Rebasing {branch} onto {onto_ref} (old base branch deleted, using fallback)")
+            result = git(
+                "rebase", onto_ref, branch,
+                cwd=clone_dir, check=False,
+            )
 
         if result.returncode != 0:
             git("rebase", "--abort", cwd=clone_dir, check=False)
@@ -227,6 +261,12 @@ def process_stack(stack_file, dry_run=False):
         print("  No actionable PRs — skipping")
         return False, errors
 
+    # ── Snapshot branch SHAs (survives branch deletion) ────────
+    if not dry_run:
+        changed_by_sha = _snapshot_branch_shas(repo, fork, prs)
+    else:
+        changed_by_sha = False
+
     # ── Detect newly merged PRs (bottom-up) ────────────────────
     newly_merged = []
     for pr_entry in prs:
@@ -247,7 +287,11 @@ def process_stack(stack_file, dry_run=False):
 
     if not newly_merged:
         print("  Nothing new")
-        return False, errors
+        if changed_by_sha:
+            # Persist updated SHAs even when no merges detected
+            with open(stack_file, "w") as fh:
+                yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
+        return changed_by_sha, errors
 
     remaining = [p for p in prs if p["status"] != "merged"]
     last_merged = newly_merged[-1]
@@ -283,26 +327,25 @@ def process_stack(stack_file, dry_run=False):
             for pr_entry in remaining:
                 git("fetch", "origin", pr_entry["branch"], cwd=clone_dir)
 
-            # Fetch the last merged branch — needed as old-base reference
+            # Fetch the last merged branch — needed as old-base reference.
+            # If deleted (common after merge), use the saved SHA instead.
             fetch = git(
                 "fetch", "origin", last_merged["branch"],
                 cwd=clone_dir, check=False,
             )
-            if fetch.returncode != 0:
-                msg = (
-                    f"Old base branch `{last_merged['branch']}` no longer "
-                    "exists on the fork — cannot determine rebase range"
-                )
-                print(f"  ERROR: {msg}")
-                errors.append((None, msg))
-                stack["prs"] = remaining
-                with open(stack_file, "w") as fh:
-                    yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
-                return True, errors
+            if fetch.returncode == 0:
+                merged_branch_ref = f"origin/{last_merged['branch']}"
+            elif last_merged.get("sha"):
+                # Branch deleted but we have the SHA from a previous snapshot
+                merged_branch_ref = last_merged["sha"]
+                print(f"  Branch `{last_merged['branch']}` deleted — using saved SHA {merged_branch_ref[:12]}")
+            else:
+                merged_branch_ref = None
+                print(f"  Branch `{last_merged['branch']}` deleted, no saved SHA — using fallback rebase")
 
             results = rebase_remaining(
                 clone_dir, base, remaining,
-                last_merged["branch"], upstream_remote, repo,
+                merged_branch_ref, upstream_remote, repo,
             )
             for entry, ok, error in results:
                 if not ok:
@@ -357,6 +400,7 @@ def main():
         diff = git("diff", "--cached", "--quiet", check=False)
         if diff.returncode != 0:
             git("commit", "-m", "chore: update stack status after rebase")
+            git("pull", "--rebase", check=False)
             git("push")
             print("  Pushed")
         else:
