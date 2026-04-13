@@ -37,4 +37,5 @@ jobs:
       - name: Run stack manager
         env:
           GH_TOKEN: ${{ secrets.STACKED_PRS_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python stack_manager.py

@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 # Ensure UTF-8 output on Windows
@@ -59,6 +61,38 @@ def release_lock(fork_repo):
     """Release the lock for a fork repo."""
     lock_file = LOCKS_DIR / f"{fork_repo.replace('/', '_')}.lock"
     lock_file.unlink(missing_ok=True)
+
+
+# ── Discord notifications ──────────────────────────────────────
+
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+_discord_log = []  # collect events during the run, send summary at the end
+
+
+def discord_event(msg):
+    """Queue a Discord notification line for the end-of-run summary."""
+    _discord_log.append(msg)
+
+
+def discord_flush():
+    """Send all queued events as a single Discord message. Best-effort."""
+    if not DISCORD_WEBHOOK_URL or not _discord_log:
+        return
+    body = "\n".join(_discord_log)
+    payload = json.dumps({
+        "username": "Stacked PR Manager",
+        "content": body[:2000],  # Discord message limit
+    }).encode()
+    req = urllib.request.Request(
+        DISCORD_WEBHOOK_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as exc:
+        print(f"  Warning: Discord notification failed: {exc}")
 
 
 def run_cmd(cmd, cwd=None, check=True):
@@ -131,6 +165,17 @@ def comment_on_pr(repo, pr_number, body):
         print(f"  Warning: could not comment on PR #{pr_number}: {exc}")
 
 
+def retarget_pr(repo, pr_number, new_base):
+    """Change a PR's base branch (best-effort)."""
+    try:
+        gh("pr", "edit", str(pr_number), "--repo", repo, "--base", new_base)
+        print(f"  Retargeted PR #{pr_number} to `{new_base}`")
+        return True
+    except Exception as exc:
+        print(f"  Warning: could not retarget PR #{pr_number}: {exc}")
+        return False
+
+
 # ── Git / clone helpers ────────────────────────────────────────
 
 
@@ -164,6 +209,9 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
     - a SHA string — branch was deleted but we saved the tip SHA
     - ``None`` — branch deleted and no SHA saved; falls back to plain rebase
       (works for regular merges, may conflict on squash merges)
+
+    For the first remaining PR, also retargets it to the stack's base branch
+    so the GitHub PR diff is clean regardless of branch deletion timing.
     """
     results = []
     base_ref = f"{upstream_remote}/{base_branch}"
@@ -173,6 +221,11 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
 
         # What we rebase onto
         onto_ref = base_ref if i == 0 else remaining_prs[i - 1]["branch"]
+
+        # Retarget the first remaining PR to the base branch
+        # (it was previously targeting the now-merged branch)
+        if i == 0 and pr_entry.get("pr"):
+            retarget_pr(upstream_repo, pr_entry["pr"], base_branch)
 
         # Make sure the local branch tracks origin
         git("checkout", "-B", branch, f"origin/{branch}", cwd=clone_dir)
@@ -190,7 +243,7 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
         else:
             # Fallback: old base branch was deleted, use plain rebase
             # Git's patch-id matching skips already-applied commits
-            print(f"  Rebasing {branch} onto {onto_ref} (old base branch deleted, using fallback)")
+            print(f"  Rebasing {branch} onto {onto_ref} (old base deleted, using fallback)")
             result = git(
                 "rebase", onto_ref, branch,
                 cwd=clone_dir, check=False,
@@ -209,6 +262,7 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
                     f"Could not rebase `{branch}` onto `{onto_ref}`.\n"
                     "Please resolve manually and push.",
                 )
+            discord_event(f"⚠️ **{upstream_repo}** PR #{pr_entry.get('pr', '?')}: conflict rebasing `{branch}` onto `{onto_ref}`")
             break  # stop cascading
 
         # Force-push (with lease for safety)
@@ -221,17 +275,31 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
             results.append(
                 (pr_entry, False, f"Force-push failed for `{branch}`")
             )
+            discord_event(f"❌ **{upstream_repo}** PR #{pr_entry.get('pr', '?')}: force-push failed for `{branch}`")
             break
 
         pr_entry["status"] = "open"
         results.append((pr_entry, True, None))
 
+        pr_num = pr_entry.get("pr", "?")
         if pr_entry.get("pr"):
-            comment_on_pr(
-                upstream_repo, pr_entry["pr"],
-                f"♻️ **Stacked PR Manager** 🤖: rebased `{branch}` onto "
-                f"`{onto_ref}` after a lower PR in the stack was merged.",
-            )
+            if i == 0:
+                comment_on_pr(
+                    upstream_repo, pr_entry["pr"],
+                    f"♻️ **Stacked PR Manager** 🤖: a lower PR in the stack was merged.\n\n"
+                    f"- Retargeted this PR to `{base_branch}`\n"
+                    f"- Rebased `{branch}` onto `{base_branch}`\n"
+                    f"- Force-pushed to update the diff",
+                )
+                discord_event(f"♻️ **{upstream_repo}** PR #{pr_num}: retargeted to `{base_branch}`, rebased `{branch}`")
+            else:
+                prev_branch = remaining_prs[i - 1]["branch"]
+                comment_on_pr(
+                    upstream_repo, pr_entry["pr"],
+                    f"♻️ **Stacked PR Manager** 🤖: rebased `{branch}` onto "
+                    f"`{prev_branch}` (cascade from lower PR merge).",
+                )
+                discord_event(f"♻️ **{upstream_repo}** PR #{pr_num}: rebased `{branch}` onto `{prev_branch}`")
 
         # Next iteration's old base is this branch's pre-rebase tip
         old_base_ref = old_tip
@@ -279,6 +347,7 @@ def process_stack(stack_file, dry_run=False):
             pr_entry["status"] = "merged"
             newly_merged.append(pr_entry)
             print(f"  ✓ PR #{pr_entry['pr']} ({pr_entry['branch']}) merged")
+            discord_event(f"📦 **{repo}** PR #{pr_entry['pr']} (`{pr_entry['branch']}`) merged")
         elif state == "CLOSED":
             pr_entry["status"] = "closed"
             print(f"  ✗ PR #{pr_entry['pr']} ({pr_entry['branch']}) closed")
@@ -298,6 +367,7 @@ def process_stack(stack_file, dry_run=False):
 
     if not remaining:
         print("  Stack complete — all PRs merged")
+        discord_event(f"🎉 **{repo}** stack complete — all PRs merged")
         stack["prs"] = []
         with open(stack_file, "w") as fh:
             yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
@@ -392,7 +462,7 @@ def main():
             all_errors.append((None, str(exc)))
 
     # Commit status changes back to the control-plane repo
-    if any_changed:
+    if any_changed and not dry_run:
         print(f"\n{'=' * 60}")
         print("Committing status changes")
         print(f"{'=' * 60}")
@@ -411,6 +481,11 @@ def main():
         for entry, error in all_errors:
             tag = f"PR #{entry['pr']}" if entry and entry.get("pr") else "–"
             print(f"  {tag}: {error}")
+            discord_event(f"❌ {tag}: {error}")
+
+    discord_flush()
+
+    if all_errors:
         sys.exit(1)
 
     print("\nDone.")

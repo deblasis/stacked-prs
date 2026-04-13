@@ -143,12 +143,18 @@ main  <--  feature-a (PR #1)  <--  feature-b (PR #2)  <--  feature-c (PR #3)
 When PR #1 is merged:
 
 1. `feature-a` is detected as merged and removed from the stack
-2. `feature-b` is rebased onto `main` using `git rebase --onto main <old-base> feature-b`
-3. `feature-c` is rebased onto the new `feature-b`
-4. Both branches are force-pushed to the fork
-5. Comments are posted on PRs #2 and #3:
-   > ♻️ **Stacked PR Manager** 🤖: rebased `feature-b` onto `upstream/main` after a lower PR in the stack was merged.
-6. The stack YAML is updated and committed
+2. PR #2 is **retargeted** to `main` (so the GitHub diff is immediately correct)
+3. `feature-b` is rebased onto `main` using `git rebase --onto main <old-base> feature-b`
+4. `feature-c` is rebased onto the new `feature-b` (PR #3 keeps targeting `feature-b`)
+5. Both branches are force-pushed to the fork
+6. A comment is posted on PR #2:
+   > ♻️ **Stacked PR Manager** 🤖: a lower PR in the stack was merged.
+   > - Retargeted this PR to `main`
+   > - Rebased `feature-b` onto `main`
+   > - Force-pushed to update the diff
+7. A comment is posted on PR #3:
+   > ♻️ **Stacked PR Manager** 🤖: rebased `feature-c` onto `feature-b` (cascade from lower PR merge).
+8. The stack YAML is updated and committed
 
 If a rebase conflicts:
 
@@ -182,6 +188,7 @@ The only edge case: if a branch is deleted before the script has **ever** run (n
 
 ## Safety features
 
+- **Automatic PR retargeting** — when a lower PR is merged, the next PR's base is updated to the stack's base branch so the GitHub diff is immediately clean
 - **Force-push with lease** — won't clobber changes pushed between fetch and push
 - **Per-fork locking** — prevents concurrent rebases of the same fork (10-minute stale lock threshold)
 - **Concurrency control** — only one workflow run at a time; stale runs are cancelled
