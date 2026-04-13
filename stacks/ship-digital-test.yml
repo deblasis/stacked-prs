@@ -2,12 +2,9 @@ repo: ship-digital/stacked-prs-upstream
 fork: deblasis/stacked-prs-fork
 base: main
 prs:
-  - branch: feature-a
-    pr: 1
-    status: open
-  - branch: feature-b
-    pr: 2
-    status: open
-  - branch: feature-c
-    pr: 3
-    status: open
+- branch: feature-b
+  pr: 2
+  status: open
+- branch: feature-c
+  pr: 3
+  status: open
