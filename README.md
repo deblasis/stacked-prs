@@ -88,7 +88,30 @@ Or use your existing `gh` auth token:
 gh auth token | gh secret set STACKED_PRS_TOKEN --repo your-user/stacked-prs
 ```
 
-### 4. Create a stack file
+### 4. (Optional) Set up Discord notifications
+
+Get notified on Discord when PRs are merged, rebased, or hit conflicts. All messages include clickable links to PRs, repos, and branches.
+
+1. In your Discord server: channel settings -> Integrations -> Webhooks -> New Webhook
+2. Copy the webhook URL
+3. Add it as a secret:
+
+```bash
+gh secret set DISCORD_WEBHOOK_URL --repo your-user/stacked-prs
+# paste the webhook URL when prompted
+```
+
+If not set, the script runs silently (no errors). If Discord is unreachable, the script continues normally — notifications are best-effort.
+
+Example notifications:
+> 📦 [upstream-org/project](https://github.com/upstream-org/project) [PR #100](https://github.com/upstream-org/project/pull/100) (`feature/auth`) merged
+>
+> ♻️ [upstream-org/project](https://github.com/upstream-org/project) [PR #101](https://github.com/upstream-org/project/pull/101): retargeted to `main`, rebased [`feature/dashboard`](https://github.com/your-user/project/tree/feature/dashboard)
+>
+> ⚠️ [upstream-org/project](https://github.com/upstream-org/project) [PR #102](https://github.com/upstream-org/project/pull/102): conflict rebasing `feature/api` onto `main`
+
+### 5. Create a stack file
+
 
 Create a YAML file in `stacks/` describing your stack. Example for a cross-repo (fork to upstream) setup:
 
@@ -122,7 +145,7 @@ prs:
     status: open
 ```
 
-### 5. Push and wait
+### 6. Push and wait
 
 The cron runs every 5 minutes. When you merge the bottom PR of any stack, the remaining PRs get rebased automatically.
 
@@ -193,7 +216,8 @@ The only edge case: if a branch is deleted before the script has **ever** run (n
 - **Per-fork locking** — prevents concurrent rebases of the same fork (10-minute stale lock threshold)
 - **Concurrency control** — only one workflow run at a time; stale runs are cancelled
 - **Explicit opt-in** — only PRs you list in a stack file are processed
-- **Conflict escalation** — rebase conflicts stop the cascade and notify you via PR comment
+- **Conflict escalation** — rebase conflicts stop the cascade and notify you via PR comment and Discord
+- **Discord notifications** — optional, best-effort. Clickable links to PRs, repos, and branches. Never blocks the main workflow
 
 ## Running locally
 
