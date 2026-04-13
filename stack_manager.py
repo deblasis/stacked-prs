@@ -221,10 +221,16 @@ def process_stack(stack_file, dry_run=False):
 
     print(f"  repo={repo}  fork={fork}  base={base}  prs={len(prs)}")
 
+    # ── Skip stacks with no actionable PRs ─────────────────────
+    actionable = [p for p in prs if p["status"] not in ("merged", "closed")]
+    if not actionable:
+        print("  No actionable PRs — skipping")
+        return False, errors
+
     # ── Detect newly merged PRs (bottom-up) ────────────────────
     newly_merged = []
     for pr_entry in prs:
-        if pr_entry["status"] == "merged":
+        if pr_entry["status"] in ("merged", "closed"):
             continue
         if pr_entry.get("pr") is None:
             break
@@ -233,8 +239,11 @@ def process_stack(stack_file, dry_run=False):
             pr_entry["status"] = "merged"
             newly_merged.append(pr_entry)
             print(f"  ✓ PR #{pr_entry['pr']} ({pr_entry['branch']}) merged")
+        elif state == "CLOSED":
+            pr_entry["status"] = "closed"
+            print(f"  ✗ PR #{pr_entry['pr']} ({pr_entry['branch']}) closed")
         else:
-            break  # stop at first non-merged
+            break  # stop at first open PR
 
     if not newly_merged:
         print("  Nothing new")
