@@ -1,11 +1,7 @@
 repo: deblasis/ghostty
 base: windows
 prs:
-- branch: windows-interop-cswin32
-  pr: 215
-  status: open
-  sha: f916ab7f2918aecc92b5e494a873ce9a20625c3d
 - branch: windows-tab-detach-snap
   pr: 223
   status: open
-  sha: eb1b7f96064fa80f83f31d9350c4eab9de45b5e9
+  sha: aa05ff18f1b476e59f0a741a97e9923deba0661d
