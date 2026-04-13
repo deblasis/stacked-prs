@@ -4,7 +4,7 @@ Proactively rebases stacked PRs when lower PRs in the stack get merged. Zero inf
 
 ## How it works
 
-1. A cron job polls upstream repos every 2 minutes
+1. A cron job polls upstream repos every 5 minutes
 2. When a PR at the bottom of a stack is merged, it rebases the remaining PRs in order
 3. Uses `git rebase --onto` to cleanly transplant only the commits unique to each PR (handles squash merges)
 4. Force-pushes rebased branches to the fork
