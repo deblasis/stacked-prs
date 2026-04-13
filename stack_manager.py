@@ -123,6 +123,21 @@ def gh_json(*args):
     return json.loads(gh(*args))
 
 
+# ── URL helpers ─────────────────────────────────────────────────
+
+
+def repo_url(repo):
+    return f"https://github.com/{repo}"
+
+
+def pr_url(repo, pr_number):
+    return f"https://github.com/{repo}/pull/{pr_number}"
+
+
+def branch_url(repo, branch):
+    return f"https://github.com/{repo}/tree/{branch}"
+
+
 # ── GitHub helpers ──────────────────────────────────────────────
 
 
@@ -201,7 +216,7 @@ def setup_clone(fork_repo, upstream_repo, clone_dir):
 
 
 def rebase_remaining(clone_dir, base_branch, remaining_prs,
-                     old_base_ref, upstream_remote, upstream_repo):
+                     old_base_ref, upstream_remote, upstream_repo, fork_repo):
     """Rebase every remaining PR in the stack after lower PRs were merged.
 
     ``old_base_ref`` can be:
@@ -262,7 +277,12 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
                     f"Could not rebase `{branch}` onto `{onto_ref}`.\n"
                     "Please resolve manually and push.",
                 )
-            discord_event(f"⚠️ **{upstream_repo}** PR #{pr_entry.get('pr', '?')}: conflict rebasing `{branch}` onto `{onto_ref}`")
+            _pr_num = pr_entry.get("pr", "?")
+            discord_event(
+                f"⚠️ [{upstream_repo}](<{repo_url(upstream_repo)}>) "
+                f"[PR #{_pr_num}](<{pr_url(upstream_repo, _pr_num)}>): "
+                f"conflict rebasing [`{branch}`](<{branch_url(fork_repo, branch)}>) onto `{onto_ref}`"
+            )
             break  # stop cascading
 
         # Force-push (with lease for safety)
@@ -275,7 +295,11 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
             results.append(
                 (pr_entry, False, f"Force-push failed for `{branch}`")
             )
-            discord_event(f"❌ **{upstream_repo}** PR #{pr_entry.get('pr', '?')}: force-push failed for `{branch}`")
+            discord_event(
+                f"❌ [{upstream_repo}](<{repo_url(upstream_repo)}>) "
+                f"[PR #{pr_entry.get('pr', '?')}](<{pr_url(upstream_repo, pr_entry.get('pr', 0))}>): "
+                f"force-push failed for [`{branch}`](<{branch_url(fork_repo, branch)}>)"
+            )
             break
 
         pr_entry["status"] = "open"
@@ -291,7 +315,11 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
                     f"- Rebased `{branch}` onto `{base_branch}`\n"
                     f"- Force-pushed to update the diff",
                 )
-                discord_event(f"♻️ **{upstream_repo}** PR #{pr_num}: retargeted to `{base_branch}`, rebased `{branch}`")
+                discord_event(
+                    f"♻️ [{upstream_repo}](<{repo_url(upstream_repo)}>) "
+                    f"[PR #{pr_num}](<{pr_url(upstream_repo, pr_num)}>): "
+                    f"retargeted to `{base_branch}`, rebased [`{branch}`](<{branch_url(fork_repo, branch)}>)"
+                )
             else:
                 prev_branch = remaining_prs[i - 1]["branch"]
                 comment_on_pr(
@@ -299,7 +327,12 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
                     f"♻️ **Stacked PR Manager** 🤖: rebased `{branch}` onto "
                     f"`{prev_branch}` (cascade from lower PR merge).",
                 )
-                discord_event(f"♻️ **{upstream_repo}** PR #{pr_num}: rebased `{branch}` onto `{prev_branch}`")
+                discord_event(
+                    f"♻️ [{upstream_repo}](<{repo_url(upstream_repo)}>) "
+                    f"[PR #{pr_num}](<{pr_url(upstream_repo, pr_num)}>): "
+                    f"rebased [`{branch}`](<{branch_url(fork_repo, branch)}>) onto "
+                    f"[`{prev_branch}`](<{branch_url(fork_repo, prev_branch)}>)"
+                )
 
         # Next iteration's old base is this branch's pre-rebase tip
         old_base_ref = old_tip
@@ -347,7 +380,11 @@ def process_stack(stack_file, dry_run=False):
             pr_entry["status"] = "merged"
             newly_merged.append(pr_entry)
             print(f"  ✓ PR #{pr_entry['pr']} ({pr_entry['branch']}) merged")
-            discord_event(f"📦 **{repo}** PR #{pr_entry['pr']} (`{pr_entry['branch']}`) merged")
+            discord_event(
+                f"📦 [{repo}](<{repo_url(repo)}>) "
+                f"[PR #{pr_entry['pr']}](<{pr_url(repo, pr_entry['pr'])}>) "
+                f"(`{pr_entry['branch']}`) merged"
+            )
         elif state == "CLOSED":
             pr_entry["status"] = "closed"
             print(f"  ✗ PR #{pr_entry['pr']} ({pr_entry['branch']}) closed")
@@ -367,7 +404,7 @@ def process_stack(stack_file, dry_run=False):
 
     if not remaining:
         print("  Stack complete — all PRs merged")
-        discord_event(f"🎉 **{repo}** stack complete — all PRs merged")
+        discord_event(f"🎉 [{repo}](<{repo_url(repo)}>) stack complete — all PRs merged")
         stack["prs"] = []
         with open(stack_file, "w") as fh:
             yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
@@ -415,7 +452,7 @@ def process_stack(stack_file, dry_run=False):
 
             results = rebase_remaining(
                 clone_dir, base, remaining,
-                merged_branch_ref, upstream_remote, repo,
+                merged_branch_ref, upstream_remote, repo, fork,
             )
             for entry, ok, error in results:
                 if not ok:
