@@ -133,7 +133,7 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
             if pr_entry.get("pr"):
                 comment_on_pr(
                     upstream_repo, pr_entry["pr"],
-                    "⚠️ **Stacked PR Manager** — rebase conflict\n\n"
+                    "⚠️ **Stacked PR Manager** 🤖: rebase conflict\n\n"
                     f"Could not rebase `{branch}` onto `{onto_ref}`.\n"
                     "Please resolve manually and push.",
                 )
@@ -157,7 +157,7 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
         if pr_entry.get("pr"):
             comment_on_pr(
                 upstream_repo, pr_entry["pr"],
-                f"♻️ **Stacked PR Manager** — rebased `{branch}` onto "
+                f"♻️ **Stacked PR Manager** 🤖: rebased `{branch}` onto "
                 f"`{onto_ref}` after a lower PR in the stack was merged.",
             )
 
