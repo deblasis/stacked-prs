@@ -1,8 +1,4 @@
 repo: deblasis/stacked-prs-test
 fork: deblasis/stacked-prs-test
 base: main
-prs:
-- branch: feature-c
-  pr: 3
-  status: open
-  sha: db467288ffb65e1efa8a5ab84c8e06562fda868c
+prs: []
