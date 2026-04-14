@@ -4,6 +4,8 @@ prs:
 - branch: feature/settings-reorganization
   pr: 245
   status: open
+  sha: 81ac58e8c3f013577fbdf9f7df95bf57de0684f8
 - branch: feature/settings-color-picker
   pr: 246
   status: open
+  sha: fa0bc10ffc7177ef57e7054d7caebd2e3b127beb
