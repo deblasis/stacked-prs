@@ -1,3 +1,9 @@
 repo: deblasis/ghostty
 base: windows
-prs: []
+prs:
+  - branch: fix/issue-239-opacity-flash
+    pr: 240
+    status: open
+  - branch: refactor/issue-239-chrome-split
+    pr: 241
+    status: open
