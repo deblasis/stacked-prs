@@ -1,7 +1,3 @@
 repo: deblasis/ghostty
 base: windows
-prs:
-- branch: refactor/issue-239-chrome-split
-  pr: 241
-  status: open
-  sha: e3e055715694c02789bdabf100d42143d6633f4b
+prs: []
