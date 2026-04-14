@@ -1,0 +1,9 @@
+repo: deblasis/ghostty
+base: windows
+prs:
+- branch: feature/settings-reorganization
+  pr: 245
+  status: open
+- branch: feature/settings-color-picker
+  pr: 246
+  status: open
