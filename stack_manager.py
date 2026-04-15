@@ -259,10 +259,12 @@ def _seed_or_refresh_parent_shas(clone_dir, base_branch, remaining_prs,
     written = False
     for i, pr_entry in enumerate(remaining_prs):
         branch = pr_entry["branch"]
+        # Branches aren't checked out yet, so all refs are remote-tracking.
+        branch_ref = f"origin/{branch}"
         parent_ref = base_ref if i == 0 else f"origin/{remaining_prs[i - 1]['branch']}"
 
         recorded = pr_entry.get("parent_sha")
-        if recorded and _is_ancestor(clone_dir, recorded, branch):
+        if recorded and _is_ancestor(clone_dir, recorded, branch_ref):
             continue
         if recorded:
             print(f"  parent_sha for {branch} is stale ({recorded[:12]} no longer an ancestor) — re-seeding")
@@ -271,12 +273,12 @@ def _seed_or_refresh_parent_shas(clone_dir, base_branch, remaining_prs,
         source = None
         if i == 0 and last_merged and last_merged.get("sha"):
             candidate = last_merged["sha"]
-            if _is_ancestor(clone_dir, candidate, branch):
+            if _is_ancestor(clone_dir, candidate, branch_ref):
                 fork_point = candidate
                 source = f"last_merged.sha ({last_merged['branch']})"
         if fork_point is None:
             fork_point = git_output(
-                "merge-base", parent_ref, branch, cwd=clone_dir,
+                "merge-base", parent_ref, branch_ref, cwd=clone_dir,
             )
             source = f"merge-base with {parent_ref}"
 
