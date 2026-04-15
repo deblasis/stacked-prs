@@ -4,8 +4,8 @@ prs:
 - branch: feature/settings-gradient-editor
   pr: 251
   status: conflict
-  sha: e51d45245bda176b461439ca6fe8ef72a625a5de
+  sha: 52c6f53309ab81a2c5c2539e06d8bf463e5d3914
 - branch: feature/settings-raw-diagnostics
   pr: 252
   status: open
-  sha: 0822801f6f609fde46a0d0e73a1a0254d89fc2f7
+  sha: 20d0fb7fff3e0b938d512d44ffcb01e5ed879ad2
