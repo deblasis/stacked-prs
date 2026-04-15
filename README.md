@@ -211,6 +211,14 @@ Tracking the fork point per-child fixes both: the anchor doesn't care what the p
 
 You can enable GitHub's "Automatically delete head branches" setting. Deletion no longer matters for the rebase engine — the per-child `parent_sha` is the only anchor it needs, and it lives in the YAML, not on any branch.
 
+> **Caveat — delete timing vs downstream PRs.** If the parent branch is deleted before its child PR is retargeted, GitHub closes the child PR (it now points at a non-existent base) and **does not reopen on its own**, even after the bot retargets and rebases. The child's branch is updated on disk, but the PR stays closed.
+>
+> This is GitHub's behavior, not a bug in the bot. Two reliable setups:
+> - Leave "Automatically delete head branches" on, but merge via the GitHub UI / regular ``gh pr merge`` (no ``--delete-branch``). The bot gets to retarget the child before GitHub's background sweep deletes the parent branch. Observed in practice.
+> - Or leave auto-delete off entirely and delete merged branches manually after the bot has run.
+>
+> What does **not** work: ``gh pr merge --delete-branch`` deletes synchronously at merge time, which races the bot and tends to close downstream PRs.
+
 ## Safety features
 
 - **Automatic PR retargeting** — when a lower PR is merged, the next PR's base is updated to the stack's base branch so the GitHub diff is immediately clean
