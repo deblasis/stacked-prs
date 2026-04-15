@@ -6,7 +6,7 @@ Proactively rebases stacked PRs when lower PRs in the stack get merged. Zero inf
 
 1. A cron job polls upstream repos every 5 minutes
 2. When a PR at the bottom of a stack is merged, it rebases the remaining PRs in order
-3. Uses `git rebase --onto` to cleanly transplant only the commits unique to each PR (handles squash merges)
+3. Uses `git rebase --onto <new-base> <parent_sha> <branch>` to transplant only the commits unique to each PR. `parent_sha` is recorded per branch as the fork point it was last rebased on — the same approach Graphite takes with `refs/branch-metadata/<branch>:parentBranchRevision`. This survives squash merges, force-pushes to the parent branch, and branch deletion.
 4. Force-pushes rebased branches to the fork
 5. Posts status comments on the upstream PRs
 6. Commits updated stack state back to this repo
@@ -54,6 +54,7 @@ prs:
 | `prs[].pr` | yes | PR number on the upstream repo. Use `null` if PR hasn't been opened yet |
 | `prs[].status` | yes | Current status: `open`, `merged`, `conflict`, `push_failed` |
 | `prs[].sha` | auto | Branch tip SHA, snapshotted automatically on each poll. Do not set manually. |
+| `prs[].parent_sha` | auto | Fork point — the commit this branch was last rebased onto. Used as the `<upstream>` argument to `git rebase --onto`. Seeded on first run (from the merged parent's saved tip when a merge triggered the run, otherwise from `git merge-base`), then updated on every successful rebase. Automatically re-seeded if it stops being an ancestor of the branch (signals an external rebase). Do not set manually. |
 
 ### Status values
 
@@ -167,9 +168,9 @@ When PR #1 is merged:
 
 1. `feature-a` is detected as merged and removed from the stack
 2. PR #2 is **retargeted** to `main` (so the GitHub diff is immediately correct)
-3. `feature-b` is rebased onto `main` using `git rebase --onto main <old-base> feature-b`
-4. `feature-c` is rebased onto the new `feature-b` (PR #3 keeps targeting `feature-b`)
-5. Both branches are force-pushed to the fork
+3. `feature-b` is rebased onto `main` using `git rebase --onto main <feature-b.parent_sha> feature-b`. `parent_sha` was recorded the last time `feature-b` was rebased (or seeded from `merge-base(feature-a, feature-b)` on the very first run).
+4. `feature-c` is rebased onto the new `feature-b` (PR #3 keeps targeting `feature-b`) using the same per-branch `parent_sha` anchor
+5. Both branches are force-pushed to the fork, and their `parent_sha` is updated to the SHA they were just rebased onto
 6. A comment is posted on PR #2:
    > ♻️ **Stacked PR Manager** 🤖: a lower PR in the stack was merged.
    > - Retargeted this PR to `main`
@@ -187,7 +188,7 @@ If a rebase conflicts:
 3. Cascading stops — PRs above the conflict are not rebased
 4. You resolve manually, push, and set status back to `open` in the YAML
 
-## Merge strategies and branch deletion
+## Merge strategies, branch deletion, and force-pushes
 
 All three GitHub merge strategies are supported:
 
@@ -195,19 +196,20 @@ All three GitHub merge strategies are supported:
 |---------------|-------------|
 | **Merge commit** | branch_1's commits exist in main with original SHAs. Rebase skips them trivially. |
 | **Rebase merge** | branch_1's commits are replayed with new SHAs but identical patches. Rebase handles this cleanly. |
-| **Squash merge** | All of branch_1's commits become one commit with a different patch. Requires the saved SHA to determine the precise rebase range. |
+| **Squash merge** | All of branch_1's commits become one commit with a different patch. The per-branch `parent_sha` records the exact fork point so the squashed range is known. |
+
+### Why `parent_sha` instead of the parent branch's current tip
+
+A naive implementation would pass the merged parent's tip (or last-known-tip if deleted) as `<upstream>` to `git rebase --onto`. That breaks in two common situations:
+
+- **Parent force-pushed without the child being restacked.** The current parent tip is no longer an ancestor of the child. `git rebase --onto` ends up replaying every commit from the child back to the common ancestor, which produces phantom conflicts against squash-merged history that doesn't even belong to this PR.
+- **The 5-minute poll lands after a force-push but before the merge.** Same failure: the snapshotted tip is newer than the child's fork point.
+
+Tracking the fork point per-child fixes both: the anchor doesn't care what the parent did afterward. It's what Graphite calls `parentBranchRevision`.
 
 ### Branch deletion is safe
 
-You can enable GitHub's "Automatically delete head branches" setting. The stack manager handles this:
-
-1. On **every poll**, the script snapshots each tracked branch's tip SHA into the YAML (`sha` field)
-2. When a merged branch is deleted, the saved SHA is used as the old-base reference for `git rebase --onto`
-3. This works identically to having the branch present — including squash merges
-
-The only edge case: if a branch is deleted before the script has **ever** run (no saved SHA), the script falls back to a plain `git rebase` which works for regular and rebase merges but may conflict on squash merges. In practice this doesn't happen since the cron saves SHAs continuously.
-
-**You do not need to coordinate merge timing with the stack manager.** Merge however you like, delete branches whenever you like — the SHA snapshots ensure the rebase range is always known.
+You can enable GitHub's "Automatically delete head branches" setting. Deletion no longer matters for the rebase engine — the per-child `parent_sha` is the only anchor it needs, and it lives in the YAML, not on any branch.
 
 ## Safety features
 

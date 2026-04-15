@@ -221,18 +221,88 @@ def setup_clone(fork_repo, upstream_repo, clone_dir):
 # ── Rebase engine ──────────────────────────────────────────────
 
 
+def _is_ancestor(clone_dir, maybe_ancestor, branch):
+    return git(
+        "merge-base", "--is-ancestor", maybe_ancestor, branch,
+        cwd=clone_dir, check=False,
+    ).returncode == 0
+
+
+def _seed_or_refresh_parent_shas(clone_dir, base_branch, remaining_prs,
+                                 upstream_remote, last_merged):
+    """Populate each remaining PR's ``parent_sha`` -- the anchor used as
+    ``<upstream>`` in ``git rebase --onto <base> <upstream> <branch>``.
+
+    ``parent_sha`` is the commit the branch's unique commits sit on top
+    of: the branch's fork point. Inspired by Graphite's
+    ``refs/branch-metadata/<branch>:parentBranchRevision`` field.
+
+    Seeding priority for missing / stale entries:
+
+    1. For the first remaining PR, try the just-merged parent's saved
+       tip (``last_merged.sha``). If it's an ancestor of the child, it
+       is the authoritative fork point -- correct even when the parent
+       was squash-merged, since merge-base against the squashed base
+       would skip all the way back past phase-1 style ancestors that
+       don't exist on the merged branch.
+
+    2. Fall back to ``merge-base(parent_ref, branch)``. Correct when the
+       child was freshly rebased onto its parent (fork point == parent
+       tip) or for stacks that have never seen a merge yet.
+
+    The authoritative update happens on successful rebase inside
+    ``rebase_remaining``, not here.
+
+    Returns True if any entry was written.
+    """
+    base_ref = f"{upstream_remote}/{base_branch}"
+    written = False
+    for i, pr_entry in enumerate(remaining_prs):
+        branch = pr_entry["branch"]
+        parent_ref = base_ref if i == 0 else f"origin/{remaining_prs[i - 1]['branch']}"
+
+        recorded = pr_entry.get("parent_sha")
+        if recorded and _is_ancestor(clone_dir, recorded, branch):
+            continue
+        if recorded:
+            print(f"  parent_sha for {branch} is stale ({recorded[:12]} no longer an ancestor) — re-seeding")
+
+        fork_point = None
+        source = None
+        if i == 0 and last_merged and last_merged.get("sha"):
+            candidate = last_merged["sha"]
+            if _is_ancestor(clone_dir, candidate, branch):
+                fork_point = candidate
+                source = f"last_merged.sha ({last_merged['branch']})"
+        if fork_point is None:
+            fork_point = git_output(
+                "merge-base", parent_ref, branch, cwd=clone_dir,
+            )
+            source = f"merge-base with {parent_ref}"
+
+        pr_entry["parent_sha"] = fork_point
+        written = True
+        print(f"  parent_sha for {branch}: {fork_point[:12]} (via {source})")
+    return written
+
+
 def rebase_remaining(clone_dir, base_branch, remaining_prs,
-                     old_base_ref, upstream_remote, upstream_repo, fork_repo):
+                     upstream_remote, upstream_repo, fork_repo):
     """Rebase every remaining PR in the stack after lower PRs were merged.
 
-    ``old_base_ref`` can be:
-    - ``origin/<branch>`` — the merged branch still exists on the fork
-    - a SHA string — branch was deleted but we saved the tip SHA
-    - ``None`` — branch deleted and no SHA saved; falls back to plain rebase
-      (works for regular merges, may conflict on squash merges)
+    Each PR's ``--onto`` anchor is its own recorded ``parent_sha`` --
+    the fork point it was last rebased on. That's the only SHA whose
+    "ancestor of the branch" property is stable: the parent branch may
+    have been force-pushed, squash-merged, or deleted, but the fork
+    point we replayed from still reaches the branch tip.
 
-    For the first remaining PR, also retargets it to the stack's base branch
-    so the GitHub PR diff is clean regardless of branch deletion timing.
+    On success, updates ``parent_sha`` to the new anchor (the tip of
+    whatever we just rebased onto) so the next run has an authoritative
+    value.
+
+    For the first remaining PR, also retargets it to the stack's base
+    branch so the GitHub PR diff is clean regardless of branch deletion
+    timing.
     """
     results = []
     base_ref = f"{upstream_remote}/{base_branch}"
@@ -251,24 +321,14 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
         # Make sure the local branch tracks origin
         git("checkout", "-B", branch, f"origin/{branch}", cwd=clone_dir)
 
-        # Save the current tip — it becomes `old_base_ref` for the next PR
-        old_tip = git_output("rev-parse", "HEAD", cwd=clone_dir)
-
-        if old_base_ref:
-            # Precise rebase: transplant only commits unique to this branch
-            print(f"  Rebasing {branch} --onto {onto_ref} {old_base_ref}")
-            result = git(
-                "rebase", "--onto", onto_ref, old_base_ref, branch,
-                cwd=clone_dir, check=False,
-            )
-        else:
-            # Fallback: old base branch was deleted, use plain rebase
-            # Git's patch-id matching skips already-applied commits
-            print(f"  Rebasing {branch} onto {onto_ref} (old base deleted, using fallback)")
-            result = git(
-                "rebase", onto_ref, branch,
-                cwd=clone_dir, check=False,
-            )
+        # Anchor is the recorded parent_sha; _seed_or_refresh_parent_shas
+        # runs just before this so the field is always present and fresh.
+        anchor = pr_entry["parent_sha"]
+        print(f"  Rebasing {branch} --onto {onto_ref} {anchor[:12]}")
+        result = git(
+            "rebase", "--onto", onto_ref, anchor, branch,
+            cwd=clone_dir, check=False,
+        )
 
         if result.returncode != 0:
             git("rebase", "--abort", cwd=clone_dir, check=False)
@@ -309,6 +369,12 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
             break
 
         pr_entry["status"] = "open"
+        # Record the new anchor: after this rebase, the branch sits on
+        # top of onto_ref, so the next rebase should replay from here.
+        pr_entry["parent_sha"] = git_output(
+            "rev-parse", onto_ref, cwd=clone_dir,
+        )
+        pr_entry["sha"] = git_output("rev-parse", "HEAD", cwd=clone_dir)
         results.append((pr_entry, True, None))
 
         pr_num = pr_entry.get("pr", "?")
@@ -339,9 +405,6 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
                     f"rebased [`{branch}`](<{branch_url(fork_repo, branch)}>) onto "
                     f"[`{prev_branch}`](<{branch_url(fork_repo, prev_branch)}>)"
                 )
-
-        # Next iteration's old base is this branch's pre-rebase tip
-        old_base_ref = old_tip
 
     return results
 
@@ -440,25 +503,16 @@ def process_stack(stack_file, dry_run=False):
             for pr_entry in remaining:
                 git("fetch", "origin", pr_entry["branch"], cwd=clone_dir)
 
-            # Fetch the last merged branch — needed as old-base reference.
-            # If deleted (common after merge), use the saved SHA instead.
-            fetch = git(
-                "fetch", "origin", last_merged["branch"],
-                cwd=clone_dir, check=False,
+            # Populate each remaining PR's parent_sha anchor (seeded on
+            # first run; refreshed if it went stale after an external
+            # rebase). rebase_remaining consumes these.
+            _seed_or_refresh_parent_shas(
+                clone_dir, base, remaining, upstream_remote, last_merged,
             )
-            if fetch.returncode == 0:
-                merged_branch_ref = f"origin/{last_merged['branch']}"
-            elif last_merged.get("sha"):
-                # Branch deleted but we have the SHA from a previous snapshot
-                merged_branch_ref = last_merged["sha"]
-                print(f"  Branch `{last_merged['branch']}` deleted — using saved SHA {merged_branch_ref[:12]}")
-            else:
-                merged_branch_ref = None
-                print(f"  Branch `{last_merged['branch']}` deleted, no saved SHA — using fallback rebase")
 
             results = rebase_remaining(
                 clone_dir, base, remaining,
-                merged_branch_ref, upstream_remote, repo, fork,
+                upstream_remote, repo, fork,
             )
             for entry, ok, error in results:
                 if not ok:
