@@ -4,7 +4,7 @@ prs:
 - branch: feature/settings-color-picker
   pr: 246
   status: open
-  sha: f8d0d2f03
+  sha: f8d0d2f03227a1b8efbed9175db8f11d7d259090
 - branch: feature/settings-search
   pr: 247
   status: open
