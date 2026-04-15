@@ -346,6 +346,207 @@ def rebase_remaining(clone_dir, base_branch, remaining_prs,
     return results
 
 
+# ── Proactive drift detection and rebase ───────────────────────
+
+
+def proactive_rebase_stack(clone_dir, base_branch, prs,
+                           upstream_remote, upstream_repo, fork_repo):
+    """Keep the stack fresh when lower PRs receive new commits without merging.
+
+    Walks the stack bottom-up. For each consecutive pair (lower, upper), checks
+    whether ``origin/<lower>`` is still an ancestor of ``origin/<upper>``. If
+    the upper has drifted (lower got new commits the upper wasn't rebased onto),
+    transplants only the upper's unique commits onto the lower using
+    ``git rebase --onto <lower> <saved-lower-sha> <upper>``.
+
+    Safety:
+    - Captures the pre-rebase tip of each touched branch; logs it before the
+      rebase and includes it in failure comments so authors can recover.
+    - On conflict: ``git rebase --abort`` (no force-push, nothing touched on
+      the remote), status flagged ``conflict``, cascading stops so uppers
+      don't pile on top of an unresolved state.
+    - On push failure: status flagged ``push_failed``; the next poll retries.
+    - Uses ``--force-with-lease`` so a concurrent push to the same branch is
+      not clobbered.
+
+    Returns a list of ``(pr_entry, ok, error)`` for each pair inspected. Pairs
+    that were already in sync are not included.
+    """
+    results = []
+
+    # Fetch everything we might touch. Non-fatal if a branch vanished between
+    # snapshot and now — we just skip it below.
+    git("fetch", upstream_remote, base_branch, cwd=clone_dir)
+    for pr_entry in prs:
+        if pr_entry["status"] in ("merged", "closed"):
+            continue
+        git("fetch", "origin", pr_entry["branch"], cwd=clone_dir, check=False)
+
+    # Once we hit an unresolved blocker (conflict / push_failed) we stop
+    # cascading. Rebasing upper PRs onto a broken lower only compounds the
+    # mess; let the author clear the blocker first.
+    blocked = False
+
+    for i, pr_entry in enumerate(prs):
+        if pr_entry["status"] in ("merged", "closed"):
+            continue
+        if pr_entry["status"] in ("conflict", "push_failed"):
+            print(f"  ⏭ {pr_entry['branch']} in `{pr_entry['status']}` — pausing cascade for this stack")
+            blocked = True
+            continue
+        if blocked:
+            print(f"  ⏭ {pr_entry['branch']} — skipped (earlier PR blocks the stack)")
+            continue
+
+        branch = pr_entry["branch"]
+
+        # Expected base: upstream/<base> for the bottom of the stack, local
+        # previous branch otherwise (the local ref reflects any rebase we
+        # just performed this run).
+        if i == 0:
+            onto_ref = f"{upstream_remote}/{base_branch}"
+            prev_entry = None
+        else:
+            prev_entry = prs[i - 1]
+            if prev_entry["status"] in ("merged", "closed"):
+                # Gap in the stack — target the base directly.
+                onto_ref = f"{upstream_remote}/{base_branch}"
+                prev_entry = None
+            else:
+                onto_ref = prev_entry["branch"]
+
+        branch_ref = f"origin/{branch}"
+
+        # Cheap ancestry check: no rebase needed if onto_ref is already an
+        # ancestor of the remote tip. Uses the local branch name (not
+        # origin/*) for prev so a just-rebased lower is reflected.
+        is_ancestor = git(
+            "merge-base", "--is-ancestor", onto_ref, branch_ref,
+            cwd=clone_dir, check=False,
+        )
+        if is_ancestor.returncode == 0:
+            print(f"  ✓ {branch} already based on {onto_ref} — no drift")
+            continue
+
+        print(f"  ⚠ {branch} has drifted from {onto_ref} — planning proactive rebase")
+
+        # Pick old-base: the saved tip the upper was originally stacked on.
+        # Falls back to the merge-base of onto_ref and branch_ref so the
+        # --onto range still selects only the upper's unique commits.
+        if prev_entry and prev_entry.get("sha"):
+            old_base_ref = prev_entry["sha"]
+            print(f"  Using saved SHA {old_base_ref[:12]} from `{prev_entry['branch']}` as old-base")
+        else:
+            old_base_ref = git_output(
+                "merge-base", onto_ref, branch_ref, cwd=clone_dir,
+            )
+            print(f"  No saved lower SHA — falling back to merge-base {old_base_ref[:12]}")
+
+        # Check out the remote tip so we rebase exactly what the PR points
+        # at, not whatever the local branch happened to be.
+        git("checkout", "-B", branch, branch_ref, cwd=clone_dir)
+        pre_rebase_tip = git_output("rev-parse", "HEAD", cwd=clone_dir)
+        print(f"  Pre-rebase tip of `{branch}`: {pre_rebase_tip}")
+
+        print(f"  Rebasing `{branch}` --onto {onto_ref} {old_base_ref[:12] if len(old_base_ref) >= 12 else old_base_ref}")
+        rebase = git(
+            "rebase", "--onto", onto_ref, old_base_ref, branch,
+            cwd=clone_dir, check=False,
+        )
+
+        if rebase.returncode != 0:
+            # Roll back the working tree; nothing has been pushed yet so the
+            # remote PR state is untouched.
+            git("rebase", "--abort", cwd=clone_dir, check=False)
+            pr_entry["status"] = "conflict"
+            error_msg = (
+                f"Proactive rebase of `{branch}` onto `{onto_ref}` conflicted "
+                f"(pre-rebase tip preserved at {pre_rebase_tip})"
+            )
+            print(f"  ✗ {error_msg}")
+            results.append((pr_entry, False, error_msg))
+
+            if pr_entry.get("pr"):
+                comment_on_pr(
+                    upstream_repo, pr_entry["pr"],
+                    "⚠️ **Stacked PR Manager** 🤖: proactive rebase conflict\n\n"
+                    f"A lower PR in the stack received new commits, so `{branch}` "
+                    f"was auto-rebased onto `{onto_ref}` — but the rebase "
+                    "conflicted and was aborted. Nothing was force-pushed.\n\n"
+                    f"- Pre-rebase tip (unchanged on remote): `{pre_rebase_tip}`\n"
+                    f"- Old-base used: `{old_base_ref}`\n\n"
+                    f"To resolve: `git fetch origin {branch} && "
+                    f"git checkout {branch} && "
+                    f"git rebase --onto {onto_ref} {old_base_ref} {branch}`, "
+                    "fix conflicts, push, then the next poll will pick up the "
+                    "cascade.",
+                )
+            _pr_num = pr_entry.get("pr", "?")
+            discord_event(
+                f"⚠️ [{upstream_repo}](<{repo_url(upstream_repo)}>) "
+                f"[PR #{_pr_num}](<{pr_url(upstream_repo, _pr_num)}>): "
+                f"proactive rebase conflict on [`{branch}`](<{branch_url(fork_repo, branch)}>) "
+                f"— remote untouched at `{pre_rebase_tip[:12]}`"
+            )
+            break  # stop cascading
+
+        post_rebase_tip = git_output("rev-parse", "HEAD", cwd=clone_dir)
+        print(f"  Post-rebase tip of `{branch}`: {post_rebase_tip}")
+
+        # Force-push with lease. If another client pushed in the meantime,
+        # the lease will reject and we'll retry next poll.
+        push = git(
+            "push", "origin", branch, "--force-with-lease",
+            cwd=clone_dir, check=False,
+        )
+        if push.returncode != 0:
+            pr_entry["status"] = "push_failed"
+            error_msg = (
+                f"Force-push of proactively rebased `{branch}` failed "
+                f"(pre-rebase tip {pre_rebase_tip}, post-rebase tip {post_rebase_tip})"
+            )
+            print(f"  ✗ {error_msg}")
+            results.append((pr_entry, False, error_msg))
+            _pr_num = pr_entry.get("pr", "?")
+            discord_event(
+                f"❌ [{upstream_repo}](<{repo_url(upstream_repo)}>) "
+                f"[PR #{_pr_num}](<{pr_url(upstream_repo, _pr_num)}>): "
+                f"force-push failed after proactive rebase of "
+                f"[`{branch}`](<{branch_url(fork_repo, branch)}>) "
+                f"— pre-rebase tip `{pre_rebase_tip[:12]}` preserved"
+            )
+            break
+
+        print(f"  ✓ `{branch}` rebased and pushed: {pre_rebase_tip[:12]} → {post_rebase_tip[:12]}")
+        # Keep the snapshot in lockstep with the remote so a future cascade
+        # after a squash merge sees the correct old-base.
+        pr_entry["sha"] = post_rebase_tip
+        results.append((pr_entry, True, None))
+
+        if pr_entry.get("pr"):
+            comment_on_pr(
+                upstream_repo, pr_entry["pr"],
+                f"♻️ **Stacked PR Manager** 🤖: proactive rebase\n\n"
+                f"A lower PR in the stack received new commits. `{branch}` was "
+                f"rebased onto `{onto_ref}` to keep the stack linear — no "
+                "commits were lost.\n\n"
+                f"- Pre-rebase tip: `{pre_rebase_tip}`\n"
+                f"- New tip: `{post_rebase_tip}`\n"
+                "- Force-pushed with lease. Local checkouts: "
+                f"`git fetch origin {branch} && "
+                f"git reset --hard origin/{branch}`.",
+            )
+            _pr_num = pr_entry.get("pr", "?")
+            discord_event(
+                f"♻️ [{upstream_repo}](<{repo_url(upstream_repo)}>) "
+                f"[PR #{_pr_num}](<{pr_url(upstream_repo, _pr_num)}>): "
+                f"proactively rebased [`{branch}`](<{branch_url(fork_repo, branch)}>) "
+                f"onto `{onto_ref}` — `{pre_rebase_tip[:12]}` → `{post_rebase_tip[:12]}`"
+            )
+
+    return results
+
+
 # ── Stack processing ───────────────────────────────────────────
 
 
@@ -398,12 +599,48 @@ def process_stack(stack_file, dry_run=False):
             break  # stop at first open PR
 
     if not newly_merged:
-        print("  Nothing new")
-        if changed_by_sha:
-            # Persist updated SHAs even when no merges detected
+        # No merges this poll. If branch SHAs moved (someone pushed to a
+        # tracked branch), some upper PR may now be drifted against its
+        # lower. Run a proactive check so drift is caught incrementally
+        # rather than piling up until the next merge.
+        if not changed_by_sha:
+            print("  Nothing new")
+            return False, errors
+
+        if dry_run:
+            print("  [DRY RUN] SHAs changed — would check for drift and proactively rebase")
             with open(stack_file, "w") as fh:
                 yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
-        return changed_by_sha, errors
+            return True, errors
+
+        print("  Branch SHAs changed — checking for drift")
+
+        if not acquire_lock(fork):
+            errors.append((None, f"Skipped drift check — lock held for fork {fork}"))
+            # Still persist the snapshotted SHAs before bailing.
+            with open(stack_file, "w") as fh:
+                yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
+            return True, errors
+
+        upstream_remote = "upstream" if fork != repo else "origin"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                clone_dir = Path(tmp) / "repo"
+                setup_clone(fork, repo, clone_dir)
+                proactive_results = proactive_rebase_stack(
+                    clone_dir, base, prs, upstream_remote, repo, fork,
+                )
+                for entry, ok, error in proactive_results:
+                    if not ok:
+                        errors.append((entry, error))
+        finally:
+            release_lock(fork)
+
+        # Persist regardless of outcome — we want status flags (conflict /
+        # push_failed) and any updated SHAs written back to the YAML.
+        with open(stack_file, "w") as fh:
+            yaml.dump(stack, fh, default_flow_style=False, sort_keys=False)
+        return True, errors
 
     remaining = [p for p in prs if p["status"] != "merged"]
     last_merged = newly_merged[-1]

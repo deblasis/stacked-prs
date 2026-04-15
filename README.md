@@ -5,11 +5,13 @@ Proactively rebases stacked PRs when lower PRs in the stack get merged. Zero inf
 ## How it works
 
 1. A cron job polls upstream repos every 5 minutes
-2. When a PR at the bottom of a stack is merged, it rebases the remaining PRs in order
-3. Uses `git rebase --onto` to cleanly transplant only the commits unique to each PR (handles squash merges)
-4. Force-pushes rebased branches to the fork
-5. Posts status comments on the upstream PRs
-6. Commits updated stack state back to this repo
+2. On every poll, snapshots each tracked branch's tip SHA into the YAML (used as old-base reference if a branch gets deleted or squashed)
+3. When a PR at the bottom of a stack is merged, rebases the remaining PRs in order
+4. **Also rebases proactively**: if a lower PR in a stack receives new commits without merging, upper PRs drift — the poll after the push detects the drift (via `git merge-base --is-ancestor`) and rebases each upper onto its lower so the stack stays linear
+5. Uses `git rebase --onto` to cleanly transplant only the commits unique to each PR (handles squash merges and drift alike)
+6. Force-pushes (with lease) rebased branches to the fork
+7. Posts status comments on the upstream PRs — including the pre-rebase tip so nothing is ever unrecoverable
+8. Commits updated stack state back to this repo
 
 ## Repo structure
 
@@ -187,6 +189,37 @@ If a rebase conflicts:
 3. Cascading stops — PRs above the conflict are not rebased
 4. You resolve manually, push, and set status back to `open` in the YAML
 
+## What happens when a lower PR gets new commits (without merging)
+
+If you push a fix to `feature-a` while `feature-b` and `feature-c` are open above it, `feature-b` and `feature-c` are now behind — they're still based on `feature-a`'s old tip. Left unchecked, this drift piles up until the bottom merges, at which point the cascade has to reconcile everything at once (the usual cause of "unexpected" conflicts).
+
+The next poll after your push detects the drift proactively:
+
+1. On every poll, branch tip SHAs are snapshotted into the YAML (`sha` field). A changed SHA is the signal that someone pushed
+2. For each consecutive pair `(lower, upper)` in the stack, `git merge-base --is-ancestor origin/<lower> origin/<upper>` is run. If the answer is "no", `upper` has drifted
+3. The drifted upper is rebased onto the lower using `git rebase --onto origin/<lower> <saved-lower-sha> <upper>`. The saved lower SHA is the previous lower tip the upper was originally stacked on, so only the upper's unique commits are replayed — nothing else leaks in
+4. On success: force-pushed with lease, SHA snapshot updated in the YAML, and a comment is posted on the PR including **both the pre-rebase and post-rebase tip** so authors can always recover local copies:
+   > ♻️ **Stacked PR Manager** 🤖: proactive rebase
+   > A lower PR in the stack received new commits. `feature-b` was rebased onto `feature-a` to keep the stack linear — no commits were lost.
+   > - Pre-rebase tip: `<sha>`
+   > - New tip: `<sha>`
+   > - Force-pushed with lease.
+5. On conflict: `git rebase --abort` runs (remote untouched, nothing force-pushed), status is set to `conflict`, cascading stops, and a comment is posted with the pre-rebase tip, the old-base SHA, and the exact rebase command to resolve manually
+6. The cascade continues up the stack, rebasing each drifted upper onto the one below it
+
+Blocked states (`conflict`, `push_failed`) stop the proactive cascade for that stack — uppers aren't rebased onto an unresolved lower.
+
+### Recovery guarantees
+
+Every potentially destructive step is logged with the pre-rebase tip SHA, both in the workflow logs and in the PR comment:
+
+- **Before the rebase**, the tip SHA is captured and printed to the log
+- **Before the force-push**, the tip SHA is again logged so the remote-write sequence is explicit
+- **On failure**, the pre-rebase SHA is included in the PR comment (and Discord notification). The failing branch on the remote is unchanged; only the workflow's local clone ever saw the in-progress rebase
+- **On success**, both the pre-rebase and post-rebase SHAs are in the PR comment so you can audit or recover
+
+Nothing is ever deleted. A force-push replaces the branch pointer, but the old commits remain in GitHub's reflog and can be recovered with `git fetch origin <pre-rebase-sha>` for at least 90 days.
+
 ## Merge strategies and branch deletion
 
 All three GitHub merge strategies are supported:
@@ -217,6 +250,9 @@ The only edge case: if a branch is deleted before the script has **ever** run (n
 - **Concurrency control** — only one workflow run at a time; stale runs are cancelled
 - **Explicit opt-in** — only PRs you list in a stack file are processed
 - **Conflict escalation** — rebase conflicts stop the cascade and notify you via PR comment and Discord
+- **Pre-rebase SHA preserved** — every rebase (merge-cascade or proactive) logs and announces the pre-rebase tip so you can always recover the prior state via GitHub's reflog or a direct `git fetch origin <sha>`
+- **Proactive drift rebase is opt-out safe** — a conflicting proactive rebase runs `git rebase --abort` before touching the remote; the branch on GitHub is byte-identical to what it was before the workflow ran
+- **Blocked-stack detection** — if any PR in a stack is in `conflict` or `push_failed`, higher PRs are not rebased (no piling on top of an unresolved state)
 - **Discord notifications** — optional, best-effort. Clickable links to PRs, repos, and branches. Never blocks the main workflow
 
 ## Running locally
