@@ -3,8 +3,8 @@ base: windows
 prs:
 - branch: feature/settings-color-picker
   pr: 246
-  status: conflict
-  sha: fa0bc10ffc7177ef57e7054d7caebd2e3b127beb
+  status: open
+  sha: f8d0d2f03
 - branch: feature/settings-search
   pr: 247
   status: open
