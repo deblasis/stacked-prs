@@ -1,8 +1,3 @@
 repo: deblasis/ghostty
 base: windows
-prs:
-- branch: feature/settings-raw-diagnostics
-  pr: 252
-  status: open
-  sha: 22e1b7c919425c49d683799668015bfdcef68aab
-  parent_sha: 67403ab9ef08302b759b4069a7bdafb394e6f0d3
+prs: []
