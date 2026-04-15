@@ -1,11 +1,8 @@
 repo: deblasis/ghostty
 base: windows
 prs:
-- branch: feature/settings-gradient-editor
-  pr: 251
-  status: conflict
-  sha: 52c6f53309ab81a2c5c2539e06d8bf463e5d3914
 - branch: feature/settings-raw-diagnostics
   pr: 252
   status: open
-  sha: fe2c84a8f32f08f33e93c04587d8ea07d7186497
+  sha: 22e1b7c919425c49d683799668015bfdcef68aab
+  parent_sha: 67403ab9ef08302b759b4069a7bdafb394e6f0d3
