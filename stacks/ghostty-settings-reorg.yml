@@ -8,4 +8,4 @@ prs:
 - branch: feature/settings-raw-diagnostics
   pr: 252
   status: open
-  sha: 20d0fb7fff3e0b938d512d44ffcb01e5ed879ad2
+  sha: fe2c84a8f32f08f33e93c04587d8ea07d7186497
