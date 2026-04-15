@@ -26,6 +26,9 @@ from pathlib import Path
 import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(TESTS_DIR))
+import gh_state as S  # noqa: E402
+
 REPO_ROOT = TESTS_DIR.parent
 STACK_MANAGER = REPO_ROOT / "stack_manager.py"
 FAKE_GH = TESTS_DIR / "fake_gh.py"
@@ -134,8 +137,8 @@ class BareRepo:
 
 class World:
     """All harness state for one test. Call ``set_pr`` to declare a PR,
-    ``run_manager`` to invoke the script, then inspect the returned
-    tuple or ``bare`` / ``state`` attributes."""
+    ``configure`` to tweak GitHub-side behavior, ``run_manager`` to
+    invoke the script, then inspect via ``pr(N)`` / ``bare``."""
 
     def __init__(self, tmp_path: Path, bin_dir: Path, state_path: Path):
         self.tmp_path = tmp_path
@@ -147,14 +150,7 @@ class World:
         self.bare = BareRepo(bare_dir / "repo.git")
         self.repo_name = "test/repo"
 
-        self.state_path.write_text(json.dumps({
-            "repos": {
-                self.repo_name: {
-                    "bare_path": str(self.bare.path),
-                    "prs": {},
-                }
-            }
-        }, indent=2))
+        S.init_state(self.state_path, self.repo_name, str(self.bare.path))
 
         self.sandbox = tmp_path / "sandbox"
         self.sandbox.mkdir()
@@ -167,24 +163,37 @@ class World:
         _git("add", "-A", cwd=self.sandbox)
         _git("commit", "-qm", "init", cwd=self.sandbox)
 
-    def set_pr(self, pr: int, *, head: str, base: str, state: str = "OPEN"):
-        s = json.loads(self.state_path.read_text())
-        s["repos"][self.repo_name]["prs"][str(pr)] = {
-            "state": state,
-            "headRefName": head,
-            "baseRefName": base,
-            "comments": [],
-        }
-        self.state_path.write_text(json.dumps(s, indent=2))
+    # ── state seeding ──
 
-    def mark_pr_state(self, pr: int, state: str):
-        s = json.loads(self.state_path.read_text())
-        s["repos"][self.repo_name]["prs"][str(pr)]["state"] = state
-        self.state_path.write_text(json.dumps(s, indent=2))
+    def configure(self, **overrides):
+        """Tweak GitHub-side behavior for this world's repo. See
+        ``gh_state.default_repo_config`` for the keys."""
+        S.configure(self.state_path, self.repo_name, **overrides)
+
+    def set_pr(self, pr: int, *, head: str, base: str,
+               state: str = "OPEN", mergeable: str = "MERGEABLE"):
+        S.set_pr(self.state_path, self.repo_name, pr,
+                 head=head, base=base, state_val=state, mergeable=mergeable)
+
+    def mark_pr_state(self, pr: int, state: str, *,
+                      closed_reason: str | None = None):
+        S.mark_pr_state(self.state_path, self.repo_name, pr, state,
+                        closed_reason=closed_reason)
+
+    def mark_mergeability_pending(self, pr: int, ticks: int,
+                                  final: str = "MERGEABLE"):
+        S.mark_mergeability_pending(self.state_path, self.repo_name,
+                                    pr, ticks, final)
 
     def pr(self, pr: int) -> dict:
-        s = json.loads(self.state_path.read_text())
-        return s["repos"][self.repo_name]["prs"][str(pr)]
+        """Always returns a converged view -- rules run on read."""
+        return S.get_pr(self.state_path, self.repo_name, pr)
+
+    def converge(self):
+        """Call after directly mutating the bare repo (e.g., deleting
+        a branch) so rule-driven state changes are reflected before
+        the next ``pr()`` / ``run_manager()`` call."""
+        S.converge_on_disk(self.state_path)
 
     def run_manager(self, stack_prs: list[dict]) -> tuple[int, str, dict]:
         """Write the stack YAML, exec stack_manager.py, return
