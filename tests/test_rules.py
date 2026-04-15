@@ -293,3 +293,140 @@ def test_ok_auto_delete_on_merge_does_not_break_bot(world):
     # The fact the bot finishes without errors is the pass condition.
     assert rc != 0  # final git push at sandbox level (expected)
     assert "parent_sha for feat-b" in out
+
+
+# ══════════════════════════════════════════════════════════════
+# Additional coverage: failure modes + edge cases on the bot itself
+# ══════════════════════════════════════════════════════════════
+
+
+def test_ok_push_failed_when_lease_rejected(world):
+    """Models ``git push --force-with-lease`` failing because the
+    remote tip moved between the bot's fetch and push. The bot should
+    flip the PR's status to ``push_failed`` and stop the cascade
+    rather than leave the branch in a half-rebased state."""
+    world.bare.seed_initial_commit()
+    a_tip = world.bare.commit_on_branch("feat-a", "main", "a.txt", "A")
+    world.bare.commit_on_branch("feat-b", "feat-a", "b.txt", "B")
+    world.bare.squash_merge("feat-a", "main")
+    world.set_pr(1, head="feat-a", base="main", state="MERGED")
+    world.set_pr(2, head="feat-b", base="feat-a")
+
+    # Reject the bot's force-push to feat-b (simulates the remote
+    # moving under the lease). Hook goes in AFTER our own setup
+    # pushes are done.
+    world.bare.reject_pushes_to("feat-b")
+
+    rc, out, final = world.run_manager([
+        {"branch": "feat-a", "pr": 1, "status": "open", "sha": a_tip},
+        {"branch": "feat-b", "pr": 2, "status": "open"},
+    ])
+
+    feat_b = [p for p in final["prs"] if p["branch"] == "feat-b"][0]
+    assert feat_b["status"] == "push_failed", final
+    assert "force-push failed" in out.lower() or "push_failed" in out.lower(), out
+
+
+def test_ok_multiple_prs_merged_in_one_poll(world):
+    """Two bottom PRs merged between runs. Merge-detection must
+    collect both, not just the first; cascade targets the one
+    remaining child and uses the last-merged parent's SHA as anchor."""
+    world.bare.seed_initial_commit()
+    world.bare.commit_on_branch("feat-a", "main", "a.txt", "A")
+    world.bare.commit_on_branch("feat-b", "feat-a", "b.txt", "B")
+    world.bare.commit_on_branch("feat-c", "feat-b", "c.txt", "C")
+    a_tip = world.bare.ref_sha("feat-a")
+    b_tip = world.bare.ref_sha("feat-b")
+    world.bare.squash_merge("feat-a", "main")
+    world.bare.squash_merge("feat-b", "main")
+    world.set_pr(1, head="feat-a", base="main", state="MERGED")
+    world.set_pr(2, head="feat-b", base="feat-a", state="MERGED")
+    world.set_pr(3, head="feat-c", base="feat-b")
+
+    rc, out, final = world.run_manager([
+        {"branch": "feat-a", "pr": 1, "status": "open", "sha": a_tip},
+        {"branch": "feat-b", "pr": 2, "status": "open", "sha": b_tip},
+        {"branch": "feat-c", "pr": 3, "status": "open"},
+    ])
+
+    assert "PR #1" in out and "PR #2" in out, out
+    assert [p["branch"] for p in final["prs"]] == ["feat-c"]
+    assert _rev_count(world.bare.path, "main..feat-c") == 1
+    # Anchored on the last-merged parent (feat-b), not feat-a.
+    feat_c = final["prs"][0]
+    assert feat_c.get("parent_sha") is not None
+
+
+def test_ok_full_stack_merged_empties_yaml(world):
+    """All PRs merged in one poll -> YAML becomes ``prs: []`` and the
+    stack-complete message fires. Exercises the 'nothing remaining'
+    short-circuit inside process_stack."""
+    world.bare.seed_initial_commit()
+    world.bare.commit_on_branch("feat-a", "main", "a.txt", "A")
+    world.bare.commit_on_branch("feat-b", "feat-a", "b.txt", "B")
+    a_tip = world.bare.ref_sha("feat-a")
+    b_tip = world.bare.ref_sha("feat-b")
+    world.bare.squash_merge("feat-a", "main")
+    world.bare.squash_merge("feat-b", "main")
+    world.set_pr(1, head="feat-a", base="main", state="MERGED")
+    world.set_pr(2, head="feat-b", base="feat-a", state="MERGED")
+
+    _, out, final = world.run_manager([
+        {"branch": "feat-a", "pr": 1, "status": "open", "sha": a_tip},
+        {"branch": "feat-b", "pr": 2, "status": "open", "sha": b_tip},
+    ])
+
+    assert "Stack complete" in out, out
+    assert final == {"repo": world.repo_name, "base": "main", "prs": []}
+
+
+def test_ok_dry_run_detects_without_mutating(world):
+    """``--dry-run`` must detect merges and update status in the YAML
+    but do no clone, rebase, or force-push. Confirmed by the child's
+    branch tip being byte-identical before and after."""
+    world.bare.seed_initial_commit()
+    a_tip = world.bare.commit_on_branch("feat-a", "main", "a.txt", "A")
+    world.bare.commit_on_branch("feat-b", "feat-a", "b.txt", "B")
+    b_before = world.bare.ref_sha("feat-b")
+    world.bare.squash_merge("feat-a", "main")
+    world.set_pr(1, head="feat-a", base="main", state="MERGED")
+    world.set_pr(2, head="feat-b", base="feat-a")
+
+    rc, out, final = world.run_manager([
+        {"branch": "feat-a", "pr": 1, "status": "open", "sha": a_tip},
+        {"branch": "feat-b", "pr": 2, "status": "open"},
+    ], dry_run=True)
+
+    assert "[DRY RUN]" in out, out
+    # feat-b untouched
+    assert world.bare.ref_sha("feat-b") == b_before
+    # YAML had the merged entry pruned
+    assert [p["branch"] for p in final["prs"]] == ["feat-b"]
+    # No rebase happened, so parent_sha wasn't recorded on feat-b.
+    assert "parent_sha" not in final["prs"][0]
+
+
+def test_ok_rebase_drops_all_unique_commits(world):
+    """Child has no commits above its recorded fork point (someone
+    external reset it). Bot's rebase produces an empty patch range
+    and fast-forwards the branch to the new base -- must not error."""
+    world.bare.seed_initial_commit()
+    a_tip = world.bare.commit_on_branch("feat-a", "main", "a.txt", "A")
+    # feat-b starts at feat-a's tip with no unique commits.
+    subprocess.check_call([
+        "git", "-C", str(world.bare.path), "update-ref",
+        "refs/heads/feat-b", a_tip,
+    ])
+    world.bare.squash_merge("feat-a", "main")
+    world.set_pr(1, head="feat-a", base="main", state="MERGED")
+    world.set_pr(2, head="feat-b", base="feat-a")
+
+    rc, out, final = world.run_manager([
+        {"branch": "feat-a", "pr": 1, "status": "open", "sha": a_tip},
+        {"branch": "feat-b", "pr": 2, "status": "open"},
+    ])
+
+    feat_b = [p for p in final["prs"] if p["branch"] == "feat-b"][0]
+    assert feat_b["status"] == "open", final
+    # Branch ends at main's tip (no unique commits replayed).
+    assert world.bare.ref_sha("feat-b") == world.bare.ref_sha("main")

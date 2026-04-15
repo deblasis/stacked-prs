@@ -134,6 +134,23 @@ class BareRepo:
     def delete_branch(self, branch: str):
         _git("update-ref", "-d", f"refs/heads/{branch}", cwd=self.path)
 
+    def reject_pushes_to(self, branch: str):
+        """Install a pre-receive hook on the bare repo that rejects
+        any push updating ``refs/heads/<branch>``. Models a remote
+        moving under the bot's feet between fetch and push (the
+        ``--force-with-lease`` failure path)."""
+        hook = self.path / "hooks" / "pre-receive"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "while read old new ref; do\n"
+            f'    if [ "$ref" = "refs/heads/{branch}" ]; then\n'
+            '        echo "simulated race: ref updated externally" >&2\n'
+            "        exit 1\n"
+            "    fi\n"
+            "done\n"
+        )
+        hook.chmod(0o755)
+
 
 class World:
     """All harness state for one test. Call ``set_pr`` to declare a PR,
@@ -195,9 +212,14 @@ class World:
         the next ``pr()`` / ``run_manager()`` call."""
         S.converge_on_disk(self.state_path)
 
-    def run_manager(self, stack_prs: list[dict]) -> tuple[int, str, dict]:
+    def run_manager(self, stack_prs: list[dict], *,
+                    dry_run: bool = False) -> tuple[int, str, dict]:
         """Write the stack YAML, exec stack_manager.py, return
-        (returncode, combined stdout+stderr, final yaml dict)."""
+        (returncode, combined stdout+stderr, final yaml dict).
+
+        When ``dry_run`` is set, ``--dry-run`` is passed -- the script
+        detects merges + rewrites the YAML but does no clone, rebase,
+        or push."""
         import yaml
         yaml_path = self.sandbox / "stacks" / "stack.yml"
         yaml_path.write_text(yaml.dump(
@@ -220,9 +242,11 @@ class World:
             # Also handle the un-tokenized variant if any part strips creds
             "GH_TOKEN": "fake-token-offline",
         }
+        cmd = [sys.executable, "-X", "utf8", "stack_manager.py"]
+        if dry_run:
+            cmd.append("--dry-run")
         proc = subprocess.run(
-            [sys.executable, "-X", "utf8", "stack_manager.py"],
-            cwd=self.sandbox, capture_output=True, text=True, env=env,
+            cmd, cwd=self.sandbox, capture_output=True, text=True, env=env,
         )
         final = None
         if yaml_path.exists():
