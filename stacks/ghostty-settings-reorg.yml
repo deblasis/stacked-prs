@@ -9,3 +9,15 @@ prs:
   pr: 246
   status: open
   sha: fa0bc10ffc7177ef57e7054d7caebd2e3b127beb
+- branch: feature/settings-search
+  pr: 247
+  status: open
+  sha: e8fed296575f26652052d592b62cf374a5480f00
+- branch: feature/settings-gradient-editor
+  pr: 251
+  status: open
+  sha: e51d45245bda176b461439ca6fe8ef72a625a5de
+- branch: feature/settings-raw-diagnostics
+  pr: 252
+  status: open
+  sha: 0822801f6f609fde46a0d0e73a1a0254d89fc2f7
