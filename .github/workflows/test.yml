@@ -16,7 +16,7 @@ jobs:
       - name: Install deps
         run: pip install pyyaml pytest
       - name: Run offline test harness
-        run: pytest tests/test_offline.py -v
+        run: pytest tests/ -v
         env:
           # Keep git happy on a fresh Actions runner
           GIT_AUTHOR_NAME: ci
