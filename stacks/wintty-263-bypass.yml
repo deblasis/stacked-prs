@@ -4,3 +4,4 @@ prs:
 - branch: feat/shell-detector-263
   pr: 266
   status: open
+  sha: 2740aa44bc0bfe15b1592736d5fbe4abe4ac4824
