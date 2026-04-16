@@ -1,0 +1,6 @@
+repo: deblasis/wintty
+base: windows
+prs:
+  - branch: chore/net10-migration
+    pr: 257
+    status: open
