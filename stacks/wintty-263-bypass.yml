@@ -1,0 +1,6 @@
+repo: deblasis/wintty
+base: windows
+prs:
+- branch: feat/shell-detector-263
+  pr: 266
+  status: open
