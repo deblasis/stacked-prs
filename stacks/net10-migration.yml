@@ -1,6 +1,7 @@
 repo: deblasis/wintty
 base: windows
 prs:
-  - branch: chore/net10-migration
-    pr: 257
-    status: open
+- branch: chore/net10-migration
+  pr: 257
+  status: open
+  sha: 85d0662c8041009e2b3a9ae564eca076641ae6be
