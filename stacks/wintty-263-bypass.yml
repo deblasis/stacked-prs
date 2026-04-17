@@ -14,3 +14,4 @@ prs:
 - branch: fix/conpty-bench-probe-protocol-263
   pr: 272
   status: open
+  sha: bebc2f9034cb6815ec0757978f8969fdb6bd459d
