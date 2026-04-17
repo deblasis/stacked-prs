@@ -1,14 +1,13 @@
 repo: deblasis/wintty
 base: windows
 prs:
-- branch: feat/shell-detector-263
-  pr: 266
-  status: open
-  sha: 3bfd8a1450cd374122d16ae7a817b375d91042cb
 - branch: feat/bench-conpty-263
   pr: 267
   status: open
-  sha: 8762af4edfd8f65b1fc85d5a491e946f377bfa96
+  sha: 2521b2b15e114674193a25af877e6d543fce4360
+  parent_sha: d35cd0c63a3decdec51831809d7e64897b108833
 - branch: fix/conpty-transport-audit-263
   pr: 270
-  status: open
+  status: conflict
+  sha: d83e35baf82cad42a2912a1086cef226e89f9a98
+  parent_sha: cdf7954e7b86adb79843a8f8f17e4e5881448e1a
