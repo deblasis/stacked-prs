@@ -8,3 +8,4 @@ prs:
 - branch: feat/bench-conpty-263
   pr: 267
   status: open
+  sha: 8762af4edfd8f65b1fc85d5a491e946f377bfa96
