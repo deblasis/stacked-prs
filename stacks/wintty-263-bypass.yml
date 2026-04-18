@@ -3,7 +3,7 @@ base: windows
 prs:
 - branch: fix/conpty-bench-probe-protocol-263
   pr: 272
-  status: conflict
+  status: open
   sha: bebc2f9034cb6815ec0757978f8969fdb6bd459d
   parent_sha: d83e35baf82cad42a2912a1086cef226e89f9a98
 - branch: fix/conpty-throughput-probe-protocol-263
