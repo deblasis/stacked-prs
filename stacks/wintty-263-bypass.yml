@@ -1,14 +1,9 @@
 repo: deblasis/wintty
 base: windows
 prs:
-- branch: fix/conpty-transport-audit-263
-  pr: 270
-  status: conflict
-  sha: d83e35baf82cad42a2912a1086cef226e89f9a98
-  parent_sha: cdf7954e7b86adb79843a8f8f17e4e5881448e1a
 - branch: fix/conpty-bench-probe-protocol-263
   pr: 272
-  status: open
+  status: conflict
   sha: bebc2f9034cb6815ec0757978f8969fdb6bd459d
   parent_sha: d83e35baf82cad42a2912a1086cef226e89f9a98
 - branch: fix/conpty-throughput-probe-protocol-263
