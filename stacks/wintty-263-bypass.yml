@@ -4,5 +4,5 @@ prs:
 - branch: fix/conpty-throughput-probe-protocol-263
   pr: 273
   status: open
-  sha: 8daa36ea9e6d3563a51cc51ff77e1b016ff93167
+  sha: 06b02c6f0bca8f83e8556c54d7c9f1ab5d460a8c
   parent_sha: bebc2f9034cb6815ec0757978f8969fdb6bd459d
