@@ -1,11 +1,8 @@
 repo: deblasis/wintty-release
 base: main
 prs:
-- branch: feat/manifest-404-graceful-degrade
-  pr: 46
-  status: open
-  sha: 0d2428345ac90d3b09c3e1f93a62c12f6a1a563f
 - branch: feat/download-429-handling
   pr: 47
-  status: open
+  status: conflict
   sha: 2b0c8caa03ac8139ab5a08965e4d35ab96e2cdf4
+  parent_sha: 285b58e29809ea7be4ca52582931d466335f8339
