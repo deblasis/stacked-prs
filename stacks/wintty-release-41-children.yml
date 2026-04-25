@@ -4,7 +4,7 @@ prs:
 - branch: feat/manifest-404-graceful-degrade
   pr: 46
   status: open
-  sha: 7264fec670ec0a3532bee10ea0efe151af151b22
+  sha: 0d2428345ac90d3b09c3e1f93a62c12f6a1a563f
 - branch: feat/download-429-handling
   pr: 47
   status: open
