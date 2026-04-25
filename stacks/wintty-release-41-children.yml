@@ -4,5 +4,5 @@ prs:
 - branch: feat/download-429-handling
   pr: 47
   status: open
-  sha: 2b0c8caa03ac8139ab5a08965e4d35ab96e2cdf4
+  sha: caba84f63cdf17042afe7c7c889b68050a1a15ad
   parent_sha: 285b58e29809ea7be4ca52582931d466335f8339
